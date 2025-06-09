@@ -1,20 +1,12 @@
 // Chat Server (Refactored with chat history feature)
 #include <stdio.h>
-
 #include <stdlib.h>
-
 #include <string.h>
-
 #include <unistd.h>
-
 #include <pthread.h>
-
 #include <arpa/inet.h>
-
 #include <sys/stat.h> 
-
 #include <openssl/ssl.h>
-
 #include <openssl/err.h>
 
 #define PORT 12345
@@ -125,15 +117,16 @@ void remove_client(int sock) {
 }
 
 void send_online_users_ssl(SSL * ssl) {
-  char msg[BUFFER_SIZE];
-  pthread_mutex_lock( & clients_mutex);
-  snprintf(msg, sizeof(msg), "Online users:\n");
-  SSL_write(ssl, msg, strlen(msg));
-  for (int i = 0; i < client_count; i++) {
-    snprintf(msg, sizeof(msg), "%d. %s\n", i + 1, clients[i].username);
-    SSL_write(ssl, msg, strlen(msg));
-  }
-  pthread_mutex_unlock( & clients_mutex);
+    char msg[BUFFER_SIZE] = "Online users:\n";
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < client_count; i++) {
+        char entry[64];
+        snprintf(entry, sizeof(entry), "%d. %s\n", i + 1, clients[i].username);
+        strncat(msg, entry, sizeof(msg) - strlen(msg) - 1);
+    }
+    pthread_mutex_unlock(&clients_mutex);
+    SSL_write(ssl, msg, strlen(msg)); // Gửi toàn bộ danh sách một lần
+
 }
 
 int find_client_by_index(int index) {
@@ -148,47 +141,60 @@ int find_client_by_index(int index) {
 
 // ======================= Chat History Utils =======================
 void ensure_history_folder() {
-  struct stat st = {
-    0
-  };
-  if (stat("history", & st) == -1) {
-    mkdir("history", 0700); // Tạo folder history với quyền rwx cho owner
-  }
+    struct stat st;
+    if (stat("history", &st) == -1) {
+        mkdir("history", 0700);
+    }
+}
+void sanitize_filename(char *filename) {
+    for (int i = 0; filename[i]; i++) {
+        if (filename[i] == ' ') filename[i] = '_'; // Đổi dấu cách thành _
+    }
 }
 
-void get_chat_filename(const char * user1,
-  const char * user2, char * filename, size_t size) {
-  ensure_history_folder(); // Đảm bảo folder history tồn tại trước khi tạo tên file
-  if (strcmp(user1, user2) < 0)
-    snprintf(filename, size, "history/%s_%s.txt", user1, user2);
-  else
-    snprintf(filename, size, "history/%s_%s.txt", user2, user1);
+// Tạo tên file lưu trữ chat giữa hai user
+void get_chat_filename(const char *user1, const char *user2, char *filename, size_t size) {
+    ensure_history_folder();
+    if (strcmp(user1, user2) < 0)
+        snprintf(filename, size, "history/%s_%s.txt", user1, user2);
+    else
+        snprintf(filename, size, "history/%s_%s.txt", user2, user1);
+
+    sanitize_filename(filename); // Chuẩn hóa tên file
 }
 
-void save_chat_message(const char * user1,
-  const char * user2,
-    const char * message) {
-  char filename[256];
-  get_chat_filename(user1, user2, filename, sizeof(filename));
+// Lưu tin nhắn vào lịch sử chat
+void save_chat_message(const char *user1, const char *user2, const char *message) {
+    char filename[256];
+    get_chat_filename(user1, user2, filename, sizeof(filename));
 
-  FILE * fp = fopen(filename, "a");
-  if (fp) {
+    FILE *fp = fopen(filename, "a");
+    if (!fp) {
+        perror("Error opening chat file");
+        return;
+    }
     fprintf(fp, "%s\n", message);
     fclose(fp);
-  }
 }
 
-void send_chat_history_ssl(SSL * ssl,
-  const char * user1,
-  const char * user2) {
-  // Ví dụ: gửi một thông báo tạm thời
-  char msg[BUFFER_SIZE];
-  snprintf(msg, sizeof(msg), "Chat history between %s and %s is not implemented yet.\n", user1, user2);
-  fopen("history", "a"); // Đảm bảo thư mục history tồn tại
-  fprintf(stderr, "Sending chat history for %s and %s\n", user1, user2);
-  SSL_write(ssl, msg, strlen(msg));
+// Gửi lịch sử chat qua SSL
+void send_chat_history_ssl(SSL *ssl, const char *user1, const char *user2) {
+    char filename[256];
+    get_chat_filename(user1, user2, filename, sizeof(filename));
 
-  // Bạn cần bổ sung logic đọc file hoặc dữ liệu chat history rồi gửi
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        char msg[BUFFER_SIZE];
+        snprintf(msg, sizeof(msg), "No chat history found between %s and %s.\n", user1, user2);
+        SSL_write(ssl, msg, strlen(msg));
+        return;
+    }
+
+    char line[BUFFER_SIZE];
+    while (fgets(line, sizeof(line), fp)) {
+        SSL_write(ssl, line, strlen(line));
+    }
+    fclose(fp);
 }
 
 // ======================= Command Handlers =======================
@@ -348,7 +354,7 @@ void * client_handler(void * arg) {
   }
 
   remove_client(client_sock);
-  printf("❌ Client disconnected: %s\n", username);
+  printf(" Client disconnected: %s\n", username);
   SSL_shutdown(ssl);
   SSL_free(ssl);
   close(client_sock);

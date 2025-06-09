@@ -21,3 +21,5 @@
 [hiu]: switch <n>   /switch 1
 [hiu]: dshjsha
 [hiu]: sajdksadkas
+[hieu]: exit
+[hieu]: hiiii
